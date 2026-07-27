@@ -54,6 +54,15 @@ content-type: application/json
 
 <img width="1903" height="909" alt="image" src="https://github.com/user-attachments/assets/8d8c7d40-eccc-47d7-97f9-0da52f00ba4a" />
 
+## SQLite
+- Why SQLite was chosen — one or two lines, e.g. "SQLite needs no separate server, stores everything in one file, and is enough for development. Easy to swap for PostgreSQL later since only the connection changes, not the API."
+- Where the database file is stored — e.g. "tasks.db, created automatically in the app folder on first run."
+<img width="1039" height="657" alt="image" src="https://github.com/user-attachments/assets/9a23ffd4-a0b1-4c5b-b5e4-33b1bb770b1f" />
+
+- How to start the project — your run command, same as before:
+```
+  uvicorn main:app --reload
+```
 
 ## Notes
 
