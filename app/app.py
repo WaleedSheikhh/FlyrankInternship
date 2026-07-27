@@ -54,14 +54,15 @@ def get_task(task_id: int, db: Session = Depends(get_db)):
 class CreateTask(BaseModel):
     title: str
 
-@app.post("/tasks")
-def add_task(task: CreateTask):
+@app.post("/tasks", status_code=201)
+def create_task(task: CreateTask, db: Session = Depends(get_db)):
     if not task.title or not task.title.strip():
-        raise HTTPException(status_code=400, detail="Title is Required")
-
-    new_id = max((task["id"] for task in tasks), default=0) + 1
-    new_task = {"id": new_id, "title": task.title, "done": False}
-    tasks.append(new_task)
+        raise HTTPException(status_code=400, detail="Title is required")
+    
+    new_task = Task(title=task.title, done=False)
+    db.add(new_task)
+    db.commit()
+    db.refresh(new_task)
     return new_task
 
 class TaskUpdate(BaseModel):
