@@ -1,7 +1,21 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from app.database import engine, SessionLocal
+from app.models import Base, Task
 
 app = FastAPI()
+
+Base.metadata.create_all(bind=engine)
+
+db = SessionLocal()
+if db.query(Task).count() == 0:
+    db.add_all([
+        Task(title="Buy milk", done=False),
+        Task(title="Walk dog", done=True),
+        Task(title="Write code", done=False),
+    ])
+    db.commit()
+db.close()
 
 @app.get("/")
 def root():
