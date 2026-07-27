@@ -1,7 +1,8 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel
 from app.database import engine, SessionLocal
 from app.models import Base, Task
+from sqlalchemy.orm import Session
 
 app = FastAPI()
 
@@ -32,17 +33,23 @@ tasks = [
     {"id": 3, "title": "Write code", "done": False},
 ]
 
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 @app.get("/tasks")
-def get_tasks():
-    return tasks
+def get_tasks(db: Session = Depends(get_db)):
+    return db.query(Task).all()
 
-@app.get("/tasks/{tasks.id}")
-def get_task(task_id: int):
-    for task in tasks:
-        if task["id"] == task_id:
-            return task
-    raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+@app.get("/tasks/{task_id}")
+def get_task(task_id: int, db: Session = Depends(get_db)):
+    task = db.query(Task).filter(Task.id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+    return task
 
 class CreateTask(BaseModel):
     title: str
