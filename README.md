@@ -66,4 +66,24 @@ content-type: application/json
 
 ## Notes
 
-Data resets on server restart — it's stored in memory only. Database support comes in a later assignment.
+Data now survives a server restart — it's stored in a real database instead of memory. The API itself didn't change: same endpoints, same requests, same responses. Only the storage underneath changed.
+
+- Running with Docker
+
+The whole stack (app + Postgres database) now runs in Docker, together, with one command.
+
+- Start everything:
+
+```
+docker compose up --build
+```
+
+- What this does: builds the app from the Dockerfile, starts a Postgres container with a persistent volume, and connects them on a shared network. The app reaches the database using the service name db, not localhost — that's how containers find each other.
+
+- Environment variables: copy .env.example to .env in the project root and fill in real values. .env is gitignored — never commit real credentials.
+
+- Why Postgres instead of SQLite: SQLite is a single file, fine for early development. Postgres is a real database server, closer to what production fintech systems actually run, and Docker means anyone can start it identically, without installing Postgres by hand.
+
+Nothing in the API changed to make this swap. The routes and business logic are untouched — only the database connection (database.py) and how it's configured changed. That's the point of keeping storage separate from the rest of the app.
+
+How persistence was proven: created tasks through the API, ran docker compose down (stops containers, keeps the volume) and docker compose up again, then confirmed with GET /tasks that the tasks were still there. Data only disappears if the volume itself is deleted (docker compose down -v).
