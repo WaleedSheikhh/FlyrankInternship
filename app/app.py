@@ -6,6 +6,9 @@ from sqlalchemy.orm import Session
 from app.supabase_client import supabase
 
 from app.schemas_auth import AuthCredentials
+from fastapi import Header
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import HTTPException as FastAPIHTTPException
 
 print("Server running and connected to Supabase")
 
@@ -129,3 +132,24 @@ def login(credentials: AuthCredentials):
         "access_token": result.session.access_token,
         "refresh_token": result.session.refresh_token
     }
+
+
+@app.get("/public/info")
+def public_info():
+    return {"message": "Welcome stranger! This info is public."}
+
+
+@app.get("/protected/profile")
+def get_profile(authorization: str = Header(None)):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Access token required")
+
+    token = authorization.split(" ")[1]
+    return {"message": "Token received, not yet verified", "token_preview": token[:10] + "..."}
+
+@app.exception_handler(FastAPIHTTPException)
+async def custom_http_exception_handler(request, exc):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": exc.detail}
+    )
