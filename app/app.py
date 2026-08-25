@@ -3,6 +3,9 @@ from pydantic import BaseModel
 from app.database import engine, SessionLocal
 from app.models import Base, Task
 from sqlalchemy.orm import Session
+from app.supabase_client import supabase
+
+print("Server running and connected to Supabase")
 
 app = FastAPI()
 
