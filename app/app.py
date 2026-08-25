@@ -5,6 +5,8 @@ from app.models import Base, Task
 from sqlalchemy.orm import Session
 from app.supabase_client import supabase
 
+from app.schemas_auth import AuthCredentials
+
 print("Server running and connected to Supabase")
 
 app = FastAPI()
@@ -92,3 +94,38 @@ def delete_task(task_id: int, db: Session = Depends(get_db)):
     db.commit()
 
 # added db browser and run queries there
+
+
+@app.post("/auth/signup", status_code=201)
+def signup(credentials: AuthCredentials):
+    if not credentials.email or not credentials.password:
+        raise HTTPException(status_code=400, detail="Email and password are required")
+
+    try:
+        result = supabase.auth.sign_up({
+            "email": credentials.email,
+            "password": credentials.password
+        })
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return result.user
+
+
+@app.post("/auth/login")
+def login(credentials: AuthCredentials):
+    if not credentials.email or not credentials.password:
+        raise HTTPException(status_code=400, detail="Email and password are required")
+
+    try:
+        result = supabase.auth.sign_in_with_password({
+            "email": credentials.email,
+            "password": credentials.password
+        })
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid login credentials")
+
+    return {
+        "access_token": result.session.access_token,
+        "refresh_token": result.session.refresh_token
+    }
