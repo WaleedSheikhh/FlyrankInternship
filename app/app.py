@@ -11,6 +11,9 @@ from fastapi.responses import JSONResponse
 from fastapi.exceptions import HTTPException as FastAPIHTTPException
 
 from app.auth_dependency import get_current_user
+from fastapi.security import HTTPBearer
+
+bearer_scheme = HTTPBearer()
 
 print("Server running and connected to Supabase")
 
