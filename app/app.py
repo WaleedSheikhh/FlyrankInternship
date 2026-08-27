@@ -10,6 +10,8 @@ from fastapi import Header
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import HTTPException as FastAPIHTTPException
 
+from app.auth_dependency import get_current_user
+
 print("Server running and connected to Supabase")
 
 app = FastAPI()
@@ -139,24 +141,44 @@ def public_info():
     return {"message": "Welcome stranger! This info is public."}
 
 
+# @app.get("/protected/profile")
+# def get_profile(authorization: str = Header(None)):
+#     if not authorization or not authorization.startswith("Bearer "):
+#         raise HTTPException(status_code=401, detail="Access token required")
+
+#     token = authorization.split(" ")[1]
+
+#     try:
+#         user_response = supabase.auth.get_user(token)
+#     except Exception:
+#         raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+#     user = user_response.user
+#     return {
+#         "id": user.id,
+#         "email": user.email,
+#         "created_at": user.created_at
+#     }
+
 @app.get("/protected/profile")
-def get_profile(authorization: str = Header(None)):
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Access token required")
-
-    token = authorization.split(" ")[1]
-
-    try:
-        user_response = supabase.auth.get_user(token)
-    except Exception:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-
-    user = user_response.user
+def get_profile(current=Depends(get_current_user)):
+    user, token = current
     return {
         "id": user.id,
         "email": user.email,
         "created_at": user.created_at
     }
+
+@app.get("/protected/dashboard")
+def get_dashboard(current=Depends(get_current_user)):
+    user, token = current
+    return {"message": f"Welcome to your dashboard, {user.email}"}
+
+
+@app.post("/auth/logout", status_code=204)
+def logout(current=Depends(get_current_user)):
+    user, token = current
+    supabase.auth.sign_out()
 
 @app.exception_handler(FastAPIHTTPException)
 async def custom_http_exception_handler(request, exc):
