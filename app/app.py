@@ -145,7 +145,18 @@ def get_profile(authorization: str = Header(None)):
         raise HTTPException(status_code=401, detail="Access token required")
 
     token = authorization.split(" ")[1]
-    return {"message": "Token received, not yet verified", "token_preview": token[:10] + "..."}
+
+    try:
+        user_response = supabase.auth.get_user(token)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    user = user_response.user
+    return {
+        "id": user.id,
+        "email": user.email,
+        "created_at": user.created_at
+    }
 
 @app.exception_handler(FastAPIHTTPException)
 async def custom_http_exception_handler(request, exc):
