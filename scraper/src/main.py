@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 
+from datetime import datetime, timezone
+
 import sys
 sys.stdout.reconfigure(encoding="utf-8")
 
@@ -117,6 +119,72 @@ def extract_book(url, source_page):
 
 
 if __name__ == "__main__":
+    run_start = datetime.now(timezone.utc)
+
+    pages, book_urls = discover_catalogue_pages()
+    print(f"catalogue_pages={pages}")
+    print(f"discovered={len(book_urls)}")
+    print(f"unique_urls={len(book_urls)}")
+
+    # deliberately broken URL, added on purpose to prove failure survival
+    book_urls_list = list(book_urls) + ["https://books.toscrape.com/catalogue/this-book-does-not-exist_9999/index.html"]
+
+    valid_records = []
+    invalid_records = []
+    seen_urls = set()
+    cache_hits = 0
+    fetches = 0
+    failed_pages = 0
+
+    for i, url in enumerate(book_urls_list, 1):
+        try:
+            cache_path_check = os.path.join(CACHE_DIR, url.rstrip("/").split("/")[-2] + ".html")
+            was_cached = os.path.exists(cache_path_check)
+
+            raw = extract_book(url, BASE_CATALOGUE_URL)
+
+            if was_cached:
+                cache_hits += 1
+            else:
+                fetches += 1
+
+            if raw["product_url"] in seen_urls:
+                continue
+            seen_urls.add(raw["product_url"])
+
+            raw["price_gbp"] = clean_price(raw["price_text"])
+            book = Book(**raw)
+            valid_records.append(book.model_dump())
+            print(f"[{i}/{len(book_urls_list)}] OK: {book.title}")
+
+        except Exception as e:
+            failed_pages += 1
+            invalid_records.append({"url": url, "reason": str(e)})
+            print(f"[{i}/{len(book_urls_list)}] FAILED: {url} — {e}")
+
+    os.makedirs("output", exist_ok=True)
+    with open("output/books.json", "w", encoding="utf-8") as f:
+        json.dump(valid_records, f, indent=2, ensure_ascii=False)
+
+    with open("output/errors.json", "w", encoding="utf-8") as f:
+        json.dump(invalid_records, f, indent=2, ensure_ascii=False)
+
+    run_end = datetime.now(timezone.utc)
+    report = {
+        "start_time": run_start.isoformat(),
+        "duration_seconds": (run_end - run_start).total_seconds(),
+        "pages_fetched": fetches,
+        "cache_hits": cache_hits,
+        "valid_records": len(valid_records),
+        "invalid_records": len(invalid_records),
+        "failed_pages": failed_pages
+    }
+    with open("output/run-report.json", "w", encoding="utf-8") as f:
+        json.dump(report, f, indent=2)
+
+    print(f"valid_records={len(valid_records)}")
+    print(f"invalid_records={len(invalid_records)}")
+    print(f"failed_pages={failed_pages}")
     pages, book_urls = discover_catalogue_pages()
     print(f"catalogue_pages={pages}")
     print(f"discovered={len(book_urls)}")
