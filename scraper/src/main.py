@@ -5,10 +5,37 @@ from datetime import datetime, timezone
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 
+import sys
+sys.stdout.reconfigure(encoding="utf-8")
+
 USER_AGENT = "FlyRankInternshipA9/1.0 (+https://github.com/WaleedSheikhh/FlyrankInternship)"
 CACHE_DIR = "cache"
 BASE_CATALOGUE_URL = "https://books.toscrape.com/catalogue/page-1.html"
 MAX_PAGES = 3
+
+
+import re
+import json
+from pydantic import BaseModel, ValidationError
+from typing import Optional
+
+
+class Book(BaseModel):
+    title: str
+    product_url: str
+    price_text: str
+    price_gbp: float
+    availability_text: str
+    rating_text: Optional[str]
+    description: Optional[str]
+    source_page: str
+    fetched_at: str
+
+
+def clean_price(price_text):
+    # strip everything except digits and the decimal point — avoids the £ encoding issue entirely
+    cleaned = re.sub(r"[^\d.]", "", price_text)
+    return float(cleaned)
 
 
 def fetch_page(url, cache_filename):
@@ -95,16 +122,36 @@ if __name__ == "__main__":
     print(f"discovered={len(book_urls)}")
     print(f"unique_urls={len(book_urls)}")
 
-    records = []
+    valid_records = []
+    invalid_records = []
+    seen_urls = set()
+
     book_urls_list = list(book_urls)
     for i, url in enumerate(book_urls_list, 1):
         try:
-            record = extract_book(url, BASE_CATALOGUE_URL)
-            records.append(record)
-            print(f"[{i}/{len(book_urls_list)}] OK: {record['title']}")
-        except Exception as e:
-            print(f"[{i}/{len(book_urls_list)}] FAILED: {url} — {e}")
+            raw = extract_book(url, BASE_CATALOGUE_URL)
 
-    print(f"detail_pages={len(records)}")
-    if records:
-        print(records[0])
+            # canonical URL — skip if we've already stored this one
+            if raw["product_url"] in seen_urls:
+                continue
+            seen_urls.add(raw["product_url"])
+
+            raw["price_gbp"] = clean_price(raw["price_text"])
+
+            book = Book(**raw)
+            valid_records.append(book.model_dump())
+            print(f"[{i}/{len(book_urls_list)}] OK: {book.title}")
+
+        except (ValidationError, Exception) as e:
+            invalid_records.append({"url": url, "reason": str(e)})
+            print(f"[{i}/{len(book_urls_list)}] INVALID: {url} — {e}")
+
+    os.makedirs("output", exist_ok=True)
+    with open("output/books.json", "w", encoding="utf-8") as f:
+        json.dump(valid_records, f, indent=2, ensure_ascii=False)
+
+    with open("output/errors.json", "w", encoding="utf-8") as f:
+        json.dump(invalid_records, f, indent=2, ensure_ascii=False)
+
+    print(f"valid_records={len(valid_records)}")
+    print(f"invalid_records={len(invalid_records)}")
