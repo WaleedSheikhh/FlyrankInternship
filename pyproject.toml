@@ -6,7 +6,9 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi[standard]>=0.140.0",
+    "openai>=3.8.0",
     "psycopg2-binary>=2.9.12",
+    "python-dotenv>=1.2.2",
     "sqlalchemy>=2.0.51",
     "supabase>=2.31.0",
     "uvicorn>=0.51.0",
