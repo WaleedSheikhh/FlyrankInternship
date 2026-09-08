@@ -13,6 +13,10 @@ from fastapi.exceptions import HTTPException as FastAPIHTTPException
 from app.auth_dependency import get_current_user
 from fastapi.security import HTTPBearer
 
+import os
+from llm.schema import BookInput, EnrichmentOutput, Category
+
+
 bearer_scheme = HTTPBearer()
 
 print("Server running and connected to Supabase")
@@ -189,3 +193,16 @@ async def custom_http_exception_handler(request, exc):
         status_code=exc.status_code,
         content={"error": exc.detail}
     )
+
+
+@app.post("/enrich", response_model=EnrichmentOutput)
+def enrich_book(book: BookInput):
+    if os.getenv("LLM_STUB") == "1":
+        return EnrichmentOutput(
+            category=Category.other,
+            summary="Stub response — no model called.",
+            quality_flags=["stub_mode"]
+        )
+
+    # real model call comes in Stage 2 — nothing here yet
+    raise HTTPException(status_code=501, detail="Not implemented yet")
