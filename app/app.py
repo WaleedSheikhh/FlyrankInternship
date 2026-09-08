@@ -15,6 +15,7 @@ from fastapi.security import HTTPBearer
 
 import os
 from llm.schema import BookInput, EnrichmentOutput, Category
+from openai import OpenAI
 
 
 bearer_scheme = HTTPBearer()
@@ -34,6 +35,11 @@ if db.query(Task).count() == 0:
     ])
     db.commit()
 db.close()
+
+llm_client = OpenAI(
+    base_url=os.environ["LLM_BASE_URL"],
+    api_key=os.environ["LLM_API_KEY"],
+)
 
 @app.get("/")
 def root():
@@ -195,6 +201,12 @@ async def custom_http_exception_handler(request, exc):
     )
 
 
+
+def load_prompt():
+    with open("prompts/enrich-v1.md", "r", encoding="utf-8") as f:
+        return f.read()
+    
+
 @app.post("/enrich", response_model=EnrichmentOutput)
 def enrich_book(book: BookInput):
     if os.getenv("LLM_STUB") == "1":
@@ -204,5 +216,17 @@ def enrich_book(book: BookInput):
             quality_flags=["stub_mode"]
         )
 
-    # real model call comes in Stage 2 — nothing here yet
-    raise HTTPException(status_code=501, detail="Not implemented yet")
+    system_prompt = load_prompt()
+    user_content = book.model_dump_json()
+
+    response = llm_client.chat.completions.create(
+        model=os.environ["LLM_MODEL"],
+        temperature=0.2,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ],
+    )
+
+    raw_text = response.choices[0].message.content
+    return raw_text  # temporary — Stage 3 adds real parsing and validation
