@@ -14,8 +14,12 @@ from app.auth_dependency import get_current_user
 from fastapi.security import HTTPBearer
 
 import os
-from llm.schema import BookInput, EnrichmentOutput, Category
+from app.llm.schema import BookInput, EnrichmentOutput, Category
 from openai import OpenAI
+
+import json
+import re
+from pydantic import ValidationError
 
 
 bearer_scheme = HTTPBearer()
@@ -203,9 +207,31 @@ async def custom_http_exception_handler(request, exc):
 
 
 def load_prompt():
-    with open("prompts/enrich-v1.md", "r", encoding="utf-8") as f:
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    prompt_path = os.path.join(current_dir, "prompts", "enrich-v1.md")
+    with open(prompt_path, "r", encoding="utf-8") as f:
         return f.read()
     
+
+def extract_json(text: str) -> str:
+    # strip code fences if the model wrapped its answer in ```json ... ```
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if not match:
+        raise ValueError("No JSON object found in model output")
+    return match.group(0)
+
+
+def call_model(system_prompt: str, user_content: str) -> str:
+    response = llm_client.chat.completions.create(
+        model=os.environ["LLM_MODEL"],
+        temperature=0.2,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ],
+    )
+    return response.choices[0].message.content
+
 
 @app.post("/enrich", response_model=EnrichmentOutput)
 def enrich_book(book: BookInput):
@@ -219,14 +245,43 @@ def enrich_book(book: BookInput):
     system_prompt = load_prompt()
     user_content = book.model_dump_json()
 
-    response = llm_client.chat.completions.create(
-        model=os.environ["LLM_MODEL"],
-        temperature=0.2,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content},
-        ],
-    )
+    raw_text = call_model(system_prompt, user_content)
 
-    raw_text = response.choices[0].message.content
-    return raw_text  # temporary — Stage 3 adds real parsing and validation
+    try:
+        json_str = extract_json(raw_text)
+        parsed = json.loads(json_str)
+        return EnrichmentOutput(**parsed)
+    except (ValueError, json.JSONDecodeError, ValidationError) as e:
+        # one repair retry — send the model its own mistake
+        repair_message = (
+            f"Your previous answer was rejected for this reason: {e}\n"
+            f"Your previous answer was: {raw_text}\n"
+            "Return only corrected JSON matching the schema."
+        )
+        response = llm_client.chat.completions.create(
+            model=os.environ["LLM_MODEL"],
+            temperature=0.2,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+                {"role": "assistant", "content": raw_text},
+                {"role": "user", "content": repair_message},
+            ],
+        )
+        repaired_text = response.choices[0].message.content
+
+        try:
+            json_str = extract_json(repaired_text)
+            parsed = json.loads(json_str)
+            return EnrichmentOutput(**parsed)
+        except (ValueError, json.JSONDecodeError, ValidationError) as e2:
+            os.makedirs("logs", exist_ok=True)
+            with open("logs/quarantine.jsonl", "a", encoding="utf-8") as f:
+                f.write(json.dumps({
+                    "input": book.model_dump(),
+                    "raw_output": raw_text,
+                    "repair_output": repaired_text,
+                    "error": str(e2),
+                    "prompt_version": "enrich-v1"
+                }) + "\n")
+            raise HTTPException(status_code=422, detail="Model output could not be validated after repair attempt")

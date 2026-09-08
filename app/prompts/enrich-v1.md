@@ -27,4 +27,4 @@ Input: {"title": "Untitled Collection: Sabbath Poems 2014", "price_gbp": 14.27, 
 Output: {"category": "poetry", "summary": "A poetry collection with no further description available.", "quality_flags": ["missing_description"]}
 
 Input: {"title": "The Requiem Red", "price_gbp": 22.65, "description": "Ambiguous content that doesn't clearly indicate genre."}
-Output: {"category": "other", "summary": "Genre unclear from the available information.", "quality_flags": ["low_confidence"]}  
+Output: {"category": "other", "summary": "Genre unclear from the available information.", "quality_flags": ["low_confidence"]}
