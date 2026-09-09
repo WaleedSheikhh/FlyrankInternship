@@ -40,10 +40,24 @@ if db.query(Task).count() == 0:
     db.commit()
 db.close()
 
+
+
 llm_client = OpenAI(
     base_url=os.environ["LLM_BASE_URL"],
     api_key=os.environ["LLM_API_KEY"],
+    timeout=30.0,
+    max_retries=0,
 )
+
+import time
+import random
+import logging
+from openai import APITimeoutError, RateLimitError, APIStatusError
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("llm_calls")
+
+
 
 @app.get("/")
 def root():
@@ -233,8 +247,52 @@ def call_model(system_prompt: str, user_content: str) -> str:
     return response.choices[0].message.content
 
 
+def call_model_with_retry(messages, max_attempts=3):
+    last_exception = None
+
+    for attempt in range(max_attempts):
+        start = time.time()
+        try:
+            response = llm_client.chat.completions.create(
+                model=os.environ["LLM_MODEL"],
+                temperature=0.2,
+                messages=messages,
+            )
+            duration_ms = int((time.time() - start) * 1000)
+
+            usage = response.usage
+            logger.info(
+                f"llm_call prompt_version=enrich-v1 model={os.environ['LLM_MODEL']} "
+                f"input_tokens={usage.prompt_tokens} output_tokens={usage.completion_tokens} "
+                f"duration_ms={duration_ms} attempt={attempt + 1}"
+            )
+            return response.choices[0].message.content
+
+        except (APITimeoutError, RateLimitError) as e:
+            last_exception = e
+            wait = (2 ** attempt) + random.uniform(0, 1)
+            logger.info(f"llm_call retryable_error={type(e).__name__} waiting={wait:.1f}s attempt={attempt + 1}")
+            time.sleep(wait)
+
+        except APIStatusError as e:
+            if e.status_code >= 500:
+                last_exception = e
+                wait = (2 ** attempt) + random.uniform(0, 1)
+                logger.info(f"llm_call retryable_error=5xx waiting={wait:.1f}s attempt={attempt + 1}")
+                time.sleep(wait)
+            else:
+                # 400, 401, 403 — never retry, fail immediately
+                logger.info(f"llm_call non_retryable_error={e.status_code}")
+                raise
+
+    raise last_exception
+
+
 @app.post("/enrich", response_model=EnrichmentOutput)
 def enrich_book(book: BookInput):
+    if os.getenv("LLM_ENABLED", "true").lower() == "false":
+        raise HTTPException(status_code=503, detail="LLM enrichment is currently disabled")
+
     if os.getenv("LLM_STUB") == "1":
         return EnrichmentOutput(
             category=Category.other,
@@ -245,30 +303,27 @@ def enrich_book(book: BookInput):
     system_prompt = load_prompt()
     user_content = book.model_dump_json()
 
-    raw_text = call_model(system_prompt, user_content)
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content},
+    ]
+    raw_text = call_model_with_retry(messages)
 
     try:
         json_str = extract_json(raw_text)
         parsed = json.loads(json_str)
         return EnrichmentOutput(**parsed)
     except (ValueError, json.JSONDecodeError, ValidationError) as e:
-        # one repair retry — send the model its own mistake
         repair_message = (
             f"Your previous answer was rejected for this reason: {e}\n"
             f"Your previous answer was: {raw_text}\n"
             "Return only corrected JSON matching the schema."
         )
-        response = llm_client.chat.completions.create(
-            model=os.environ["LLM_MODEL"],
-            temperature=0.2,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content},
-                {"role": "assistant", "content": raw_text},
-                {"role": "user", "content": repair_message},
-            ],
-        )
-        repaired_text = response.choices[0].message.content
+        repair_messages = messages + [
+            {"role": "assistant", "content": raw_text},
+            {"role": "user", "content": repair_message},
+        ]
+        repaired_text = call_model_with_retry(repair_messages)
 
         try:
             json_str = extract_json(repaired_text)
