@@ -1,0 +1,34 @@
+[
+  {
+    "input": {"title": "A Light in the Attic", "price_gbp": 51.77, "description": "A classic illustrated poetry collection for readers of all ages."},
+    "expected_category": "poetry"
+  },
+  {
+    "input": {"title": "Sapiens: A Brief History of Humankind", "price_gbp": 54.23, "description": "A sweeping look at how Homo sapiens came to dominate the planet."},
+    "expected_category": "nonfiction"
+  },
+  {
+    "input": {"title": "The Very Hungry Caterpillar", "price_gbp": 8.99, "description": "A picture book following a caterpillar eating its way through the week."},
+    "expected_category": "childrens"
+  },
+  {
+    "input": {"title": "Sharp Objects", "price_gbp": 15.99, "description": "A journalist returns to her hometown to investigate the murders of two young girls."},
+    "expected_category": "fiction"
+  },
+  {
+    "input": {"title": "Untitled Collection: Sabbath Poems 2014", "price_gbp": 14.27, "description": null},
+    "expected_category": "poetry"
+  },
+  {
+    "input": {"title": "The Requiem Red", "price_gbp": 22.65, "description": "Ambiguous content that doesn't clearly indicate genre."},
+    "expected_category": "other"
+  },
+  {
+    "input": {"title": "asdkfj alksdjf", "price_gbp": 0.01, "description": null},
+    "expected_category": "other"
+  },
+  {
+    "input": {"title": "The Boys in the Boat", "price_gbp": 26.08, "description": "The true story of the American rowing team at the 1936 Berlin Olympics."},
+    "expected_category": "nonfiction"
+  }
+]
