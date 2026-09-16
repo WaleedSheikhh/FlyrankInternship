@@ -179,3 +179,37 @@ One real call: 520 input tokens, 260 output tokens, 1091ms. At Groq's free tier 
 ### What I'd fix with another day
 
 The repair retry currently resends the entire conversation history on failure, which costs more tokens than necessary — a tighter repair prompt that only includes the error and the original input (not the full back-and-forth) would likely fix most failures for less cost.
+
+
+
+## Background Jobs — POST /enrich (async)
+ 
+The LLM enrichment endpoint no longer blocks the request while waiting on the model. It accepts instantly, runs the real work in the background, and reports status separately — the standard pattern for anything slow.
+ 
+- **How it works:** `POST /enrich` returns `202` immediately with a `job_id`. The actual model call happens after the response is sent. `GET /enrich/{job_id}` reports current status and the final result once done.
+- **Idempotency:** the input is hashed before creating a job. Submitting the exact same request twice returns the same job (`"idempotent": true`) instead of running the model again — confirmed with a real duplicate test.
+- **Retries:** reuses the retry policy from the enrichment endpoint — retries on timeouts, `429`, and `5xx`, never on `400`/`401`/`403`. Confirmed with a real broken-model-name test: it failed fast on attempt 1 rather than wasting retries on a permanent error.
+- **Alerts:** a failed job logs an alert with the job ID and error — confirmed firing correctly in a real forced-failure test.
+**Endpoints**
+ 
+| Method | Path | What it does |
+|---|---|---|
+| POST | /enrich | Starts an enrichment job, returns `202` immediately |
+| GET | /enrich/{job_id} | Check status: pending, running, done, or failed |
+ 
+**Example**
+```
+curl -i -X POST http://localhost:8000/enrich -H "Content-Type: application/json" -d '{"title":"A Light in the Attic","price_gbp":51.77,"description":"..."}'
+```
+Returns immediately:
+```json
+{"job_id":1,"status":"pending","idempotent":false}
+```
+Then check status:
+```
+curl -i http://localhost:8000/enrich/1
+```
+```json
+{"job_id":1,"status":"done","attempts":1,"result":{"category":"poetry","summary":"...","quality_flags":[]}}
+```
+ 
