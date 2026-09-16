@@ -1,8 +1,9 @@
 from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks
 from pydantic import BaseModel
 from app.database import engine, SessionLocal
-from app.models import Base, Task, ReportJob
+from app.models import Base, Task, ReportJob, EnrichmentJob
 from app.reports import generate_task_report
+from app.jobs import hash_input, run_enrichment_job
 from sqlalchemy.orm import Session
 from app.supabase_client import supabase
 
@@ -291,58 +292,98 @@ def call_model_with_retry(messages, max_attempts=3):
     raise last_exception
 
 
-@app.post("/enrich", response_model=EnrichmentOutput)
-def enrich_book(book: BookInput):
+# @app.post("/enrich", response_model=EnrichmentOutput)
+# def enrich_book(book: BookInput):
+#     if os.getenv("LLM_ENABLED", "true").lower() == "false":
+#         raise HTTPException(status_code=503, detail="LLM enrichment is currently disabled")
+
+#     if os.getenv("LLM_STUB") == "1":
+#         return EnrichmentOutput(
+#             category=Category.other,
+#             summary="Stub response — no model called.",
+#             quality_flags=["stub_mode"]
+#         )
+
+#     system_prompt = load_prompt()
+#     user_content = book.model_dump_json()
+
+#     messages = [
+#         {"role": "system", "content": system_prompt},
+#         {"role": "user", "content": user_content},
+#     ]
+#     raw_text = call_model_with_retry(messages)
+
+#     try:
+#         json_str = extract_json(raw_text)
+#         parsed = json.loads(json_str)
+#         return EnrichmentOutput(**parsed)
+#     except (ValueError, json.JSONDecodeError, ValidationError) as e:
+#         repair_message = (
+#             f"Your previous answer was rejected for this reason: {e}\n"
+#             f"Your previous answer was: {raw_text}\n"
+#             "Return only corrected JSON matching the schema."
+#         )
+#         repair_messages = messages + [
+#             {"role": "assistant", "content": raw_text},
+#             {"role": "user", "content": repair_message},
+#         ]
+#         repaired_text = call_model_with_retry(repair_messages)
+
+#         try:
+#             json_str = extract_json(repaired_text)
+#             parsed = json.loads(json_str)
+#             return EnrichmentOutput(**parsed)
+#         except (ValueError, json.JSONDecodeError, ValidationError) as e2:
+#             os.makedirs("logs", exist_ok=True)
+#             with open("logs/quarantine.jsonl", "a", encoding="utf-8") as f:
+#                 f.write(json.dumps({
+#                     "input": book.model_dump(),
+#                     "raw_output": raw_text,
+#                     "repair_output": repaired_text,
+#                     "error": str(e2),
+#                     "prompt_version": "enrich-v1"
+#                 }) + "\n")
+#             raise HTTPException(status_code=422, detail="Model output could not be validated after repair attempt")
+
+
+@app.post("/enrich", status_code=202)
+def enrich_book(book: BookInput, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     if os.getenv("LLM_ENABLED", "true").lower() == "false":
         raise HTTPException(status_code=503, detail="LLM enrichment is currently disabled")
 
-    if os.getenv("LLM_STUB") == "1":
-        return EnrichmentOutput(
-            category=Category.other,
-            summary="Stub response — no model called.",
-            quality_flags=["stub_mode"]
-        )
+    input_dict = book.model_dump()
+    input_hash = hash_input(input_dict)
 
-    system_prompt = load_prompt()
-    user_content = book.model_dump_json()
+    existing = db.query(EnrichmentJob).filter(EnrichmentJob.input_hash == input_hash).first()
+    if existing:
+        return {"job_id": existing.id, "status": existing.status, "idempotent": True}
 
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_content},
-    ]
-    raw_text = call_model_with_retry(messages)
+    job = EnrichmentJob(
+        input_hash=input_hash,
+        status="pending",
+        input_data=json.dumps(input_dict),
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
 
-    try:
-        json_str = extract_json(raw_text)
-        parsed = json.loads(json_str)
-        return EnrichmentOutput(**parsed)
-    except (ValueError, json.JSONDecodeError, ValidationError) as e:
-        repair_message = (
-            f"Your previous answer was rejected for this reason: {e}\n"
-            f"Your previous answer was: {raw_text}\n"
-            "Return only corrected JSON matching the schema."
-        )
-        repair_messages = messages + [
-            {"role": "assistant", "content": raw_text},
-            {"role": "user", "content": repair_message},
-        ]
-        repaired_text = call_model_with_retry(repair_messages)
+    background_tasks.add_task(run_enrichment_job, job.id)
 
-        try:
-            json_str = extract_json(repaired_text)
-            parsed = json.loads(json_str)
-            return EnrichmentOutput(**parsed)
-        except (ValueError, json.JSONDecodeError, ValidationError) as e2:
-            os.makedirs("logs", exist_ok=True)
-            with open("logs/quarantine.jsonl", "a", encoding="utf-8") as f:
-                f.write(json.dumps({
-                    "input": book.model_dump(),
-                    "raw_output": raw_text,
-                    "repair_output": repaired_text,
-                    "error": str(e2),
-                    "prompt_version": "enrich-v1"
-                }) + "\n")
-            raise HTTPException(status_code=422, detail="Model output could not be validated after repair attempt")
+    return {"job_id": job.id, "status": job.status, "idempotent": False}
+
+
+@app.get("/enrich/{job_id}")
+def get_enrichment_status(job_id: int, db: Session = Depends(get_db)):
+    job = db.query(EnrichmentJob).filter(EnrichmentJob.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Enrichment job {job_id} not found")
+
+    response = {"job_id": job.id, "status": job.status, "attempts": job.attempts}
+    if job.status == "done":
+        response["result"] = json.loads(job.result)
+    if job.status == "failed":
+        response["error"] = job.error
+    return response
 
 
 
