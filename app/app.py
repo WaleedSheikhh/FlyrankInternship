@@ -1,7 +1,8 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks
 from pydantic import BaseModel
 from app.database import engine, SessionLocal
-from app.models import Base, Task
+from app.models import Base, Task, ReportJob
+from app.reports import generate_task_report
 from sqlalchemy.orm import Session
 from app.supabase_client import supabase
 
@@ -20,6 +21,8 @@ from openai import OpenAI
 import json
 import re
 from pydantic import ValidationError
+
+from fastapi.responses import FileResponse
 
 
 bearer_scheme = HTTPBearer()
@@ -340,3 +343,38 @@ def enrich_book(book: BookInput):
                     "prompt_version": "enrich-v1"
                 }) + "\n")
             raise HTTPException(status_code=422, detail="Model output could not be validated after repair attempt")
+
+
+
+@app.post("/reports", status_code=202)
+def create_report(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    job = ReportJob(status="pending")
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    background_tasks.add_task(generate_task_report, job.id, db)
+
+    return {"job_id": job.id, "status": job.status}
+
+
+@app.get("/reports/{job_id}")
+def get_report_status(job_id: int, db: Session = Depends(get_db)):
+    job = db.query(ReportJob).filter(ReportJob.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Report job {job_id} not found")
+
+    response = {"job_id": job.id, "status": job.status}
+    if job.status == "done":
+        response["download_url"] = f"/reports/{job_id}/download"
+    if job.status == "failed":
+        response["error"] = job.error
+    return response
+
+
+@app.get("/reports/{job_id}/download")
+def download_report(job_id: int, db: Session = Depends(get_db)):
+    job = db.query(ReportJob).filter(ReportJob.id == job_id).first()
+    if not job or job.status != "done" or not job.file_path:
+        raise HTTPException(status_code=404, detail="Report not ready or not found")
+    return FileResponse(job.file_path, media_type="application/pdf", filename=f"report-{job_id}.pdf")
