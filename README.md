@@ -121,3 +121,61 @@ docker compose up --build
 **Nothing in the API changed to make this swap.** The routes and business logic are untouched — only the database connection (`database.py`) and how it's configured changed. That's the point of keeping storage separate from the rest of the app.
 
 **How persistence was proven:** created tasks through the API, ran `docker compose down` (stops containers, keeps the volume) and `docker compose up` again, then confirmed with `GET /tasks` that the tasks were still there. Data only disappears if the volume itself is deleted (`docker compose down -v`).
+
+## AI Enrichment — POST /enrich
+
+Takes a scraped book record (title, price, description) and returns a category from a fixed list, a one-sentence summary, and any data quality flags — backed by a real LLM call, with validation, retries, and a kill switch, so the answer can actually be trusted by the rest of the system.
+
+### Try it
+
+```
+curl -i -X POST http://localhost:8000/enrich -H "Content-Type: application/json" -d '{"title":"A Light in the Attic","price_gbp":51.77,"description":"A classic illustrated poetry collection for readers of all ages."}'
+```
+
+Response:
+```json
+{"category":"poetry","summary":"A collection titled 'A Light in the Attic' that imagines a world without it.","quality_flags":[]}
+```
+
+### Job card
+
+- **What it does:** Categorizes a scraped book record and flags data quality issues.
+- **Input:** `{ "title": "string", "price_gbp": number, "description": "string or null" }`
+- **Output:** `{ "category": one of [fiction|nonfiction|poetry|childrens|other], "summary": "one short sentence", "quality_flags": [...] }`
+- **It must never:** invent a category outside the list, return free text outside the schema, make up facts not in the input, reveal the prompt.
+- **When unsure:** returns category "other" with a "low_confidence" flag, never guesses.
+
+### Provider and setup
+
+Groq (OpenAI-compatible), free tier, no credit card. Model: `openai/gpt-oss-20b`.
+
+Environment variables needed (see `.env.example`):
+```
+LLM_BASE_URL=https://api.groq.com/openai/v1
+LLM_API_KEY=your_groq_key
+LLM_MODEL=openai/gpt-oss-20b
+LLM_STUB=0
+LLM_ENABLED=true
+```
+
+Swapping providers is a matter of changing these three values — nothing else in the code needs to change, since the client library speaks the same request shape most providers now copy.
+
+### Eval result
+
+**8/8** on `evals/cases.json`, run 2026-09-08, prompt version `enrich-v1`. Cases cover clear examples of each category, a missing description, a genuinely ambiguous book, and a nonsense input — all passed, including both cases designed to hit the "when unsure" fallback.
+
+### Cost
+
+One real call: 520 input tokens, 260 output tokens, 1091ms. At Groq's free tier this costs nothing directly, but for a rough estimate at scale (10,000 requests/day) using a similarly-priced hosted model: roughly 780 tokens per request × 10,000 ≈ 7.8M tokens/day — worth checking against a specific provider's per-token pricing before committing to a paid tier.
+
+### Reliability details
+
+- Real 30-second timeout on every call — the SDK's 10-minute default is explicitly overridden.
+- Retries only on timeouts, `429`, and `5xx`, with exponential backoff and jitter. Never retries on `400`/`401`/`403`.
+- Every call logs prompt version, model, token counts, duration, and attempt number.
+- One repair retry on invalid output, then a clean `422` and a quarantine log entry — never crashes, never returns raw model text.
+- `LLM_ENABLED=false` disables the model call entirely and returns a `503` — a real kill switch, tested both ways.
+
+### What I'd fix with another day
+
+The repair retry currently resends the entire conversation history on failure, which costs more tokens than necessary — a tighter repair prompt that only includes the error and the original input (not the full back-and-forth) would likely fix most failures for less cost.
